@@ -1,13 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using System.Security.Claims;
 using TicketApp.Data.Concrete.EfCore;
 using TicketApp.Entity;
+using TicketApp.Models;
 
 namespace TicketApp.Controllers.Api
 {
-    public record PurchaseRequest(int TicketId, List<int> SeatIds);
-
     [ApiController]
     [Route("api/purchases")]
     public class PurchasesApiController : ControllerBase
@@ -19,43 +16,42 @@ namespace TicketApp.Controllers.Api
             _context = context;
         }
 
+        // Satın Al: POST api/purchases
         [HttpPost]
-        public async Task<IActionResult> Create([FromBody] PurchaseRequest req)
+        public async Task<IActionResult> BuyTickets([FromBody] BuyTicketDto model)
         {
-            if (!User.Identity!.IsAuthenticated)
-                return Unauthorized();
-
-            int userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
-            using var tx = await _context.Database.BeginTransactionAsync();
-
-            var seats = await _context.Seats
-                .Where(s => req.SeatIds.Contains(s.Id))
-                .ToListAsync();
-
-            if (seats.Count != req.SeatIds.Count)
-                return BadRequest("Bazı koltuklar bulunamadı.");
-
-            if (seats.Any(s => s.IsReserved))
-                return Conflict("Seçtiğiniz koltuklardan bazıları az önce rezerve edildi.");
-
-            foreach (var seat in seats)
+            if (model.SeatIds == null || !model.SeatIds.Any())
             {
+                return BadRequest("Hiç koltuk seçilmedi.");
+            }
+
+            // Seçilen koltukları kontrol et ve rezerve et
+            foreach (var seatId in model.SeatIds)
+            {
+                var seat = await _context.Seats.FindAsync(seatId);
+
+                // Koltuk yoksa veya zaten doluysa hata döndür veya atla
+                if (seat == null) return BadRequest($"Koltuk {seatId} bulunamadı.");
+                if (seat.IsReserved) return BadRequest($"Koltuk {seat.RowNumber}-{seat.SeatNumber} zaten dolu.");
+
+                // Koltuğu rezerve et
                 seat.IsReserved = true;
 
-                _context.TicketPurchases.Add(new TicketPurchase
+                // Satış kaydı oluştur
+                var purchase = new TicketPurchase
                 {
-                    TicketId = req.TicketId,
-                    SeatId = seat.Id,
-                    UserId = userId,
+                    TicketId = model.TicketId,
+                    SeatId = seatId,
+                    UserId = model.UserId, // Angular'dan gelen User ID
                     PurchaseDate = DateTime.Now
-                });
+                };
+
+                _context.TicketPurchases.Add(purchase);
             }
 
             await _context.SaveChangesAsync();
-            await tx.CommitAsync();
 
-            return Ok(new { message = "Satın alma başarılı" });
+            return Ok(new { message = "Satın alma başarılı!" });
         }
     }
 }

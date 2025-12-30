@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TicketApp.Data.Abstract;
 using TicketApp.Data.Concrete.EfCore;
+using TicketApp.Models;
 
 namespace TicketApp.Controllers.Api
 {
@@ -18,67 +19,61 @@ namespace TicketApp.Controllers.Api
             _context = context;
         }
 
-        // GET /api/tickets?startDate=2025-12-01&endDate=2025-12-31
+        // Biletleri Listele: GET api/tickets
         [HttpGet]
-        public async Task<IActionResult> Get([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+        public async Task<IActionResult> GetTickets()
         {
-            var query = _ticketRepository.Tickets.AsQueryable();
-
-            if (startDate.HasValue) query = query.Where(t => t.Date >= startDate.Value);
-            if (endDate.HasValue) query = query.Where(t => t.Date <= endDate.Value);
-
-            var tickets = await query
+            var tickets = await _ticketRepository.Tickets
                 .OrderBy(t => t.Date)
-                .Select(t => new
+                .Select(t => new TicketDto
                 {
-                    t.Id,
-                    t.PlayName,
-                    t.Date,
-                    t.Price
+                    Id = t.Id,
+                    PlayName = t.PlayName,
+                    Date = t.Date,
+                    Price = t.Price
                 })
                 .ToListAsync();
 
             return Ok(tickets);
         }
 
-        // GET /api/tickets/5/seats
-        [HttpGet("{ticketId:int}/seats")]
-        public async Task<IActionResult> GetSeats(int ticketId)
+        // Koltukları Getir: GET api/tickets/5/seats
+        [HttpGet("{id}/seats")]
+        public async Task<IActionResult> GetTicketDetails(int id)
         {
             var ticket = await _context.Tickets
                 .Include(t => t.Hall)
                 .ThenInclude(h => h.Seats)
-                .FirstOrDefaultAsync(t => t.Id == ticketId);
+                .FirstOrDefaultAsync(t => t.Id == id);
 
-            if (ticket == null) return NotFound();
+            if (ticket == null) return NotFound("Bilet bulunamadı.");
 
-            var seats = ticket.Hall!.Seats!
-                .OrderBy(s => s.RowNumber)
-                .ThenBy(s => s.SeatNumber)
-                .Select(s => new
-                {
-                    s.Id,
-                    s.RowNumber,
-                    s.SeatNumber,
-                    s.IsReserved
-                })
-                .ToList();
-
-            return Ok(new
+            var dto = new TicketDetailDto
             {
                 TicketId = ticket.Id,
                 PlayName = ticket.PlayName,
                 Date = ticket.Date,
                 Price = ticket.Price,
-                Hall = new
+                Hall = new HallDto
                 {
-                    ticket.Hall.Id,
-                    ticket.Hall.Name,
-                    ticket.Hall.RowCount,
-                    ticket.Hall.SeatsPerRow
+                    Name = ticket.Hall.Name,
+                    RowCount = ticket.Hall.RowCount,
+                    SeatsPerRow = ticket.Hall.SeatsPerRow
                 },
-                Seats = seats
-            });
+                Seats = ticket.Hall.Seats
+                    .OrderBy(s => s.RowNumber)
+                    .ThenBy(s => s.SeatNumber)
+                    .Select(s => new SeatDto
+                    {
+                        Id = s.Id,
+                        RowNumber = s.RowNumber,
+                        SeatNumber = s.SeatNumber,
+                        IsReserved = s.IsReserved
+                    })
+                    .ToList()
+            };
+
+            return Ok(dto);
         }
     }
 }

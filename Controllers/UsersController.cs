@@ -9,7 +9,10 @@ using TicketApp.Entity;
 
 namespace TicketApp.Controllers
 {
-    public class UsersController : Controller
+    // API Route tanımlaması
+    [Route("api/[controller]")]
+    [ApiController] 
+    public class UsersController : ControllerBase // Controller yerine ControllerBase daha hafiftir
     {
         private readonly IUserRepository _userRepository;
         private readonly ITicketRepository _ticketRepository;
@@ -22,28 +25,32 @@ namespace TicketApp.Controllers
             _purchaseRepository = purchaseRepository;
         }
 
-        public IActionResult Login()
+        // GET: api/users/check-auth
+        // Kullanıcının giriş yapıp yapmadığını kontrol eden endpoint
+        [HttpGet("check-auth")]
+        public IActionResult CheckAuth()
         {
             if (User.Identity!.IsAuthenticated)
-                return RedirectToAction("Profile");
-
-            return View();
+            {
+                return Ok(new { isAuthenticated = true, username = User.Identity.Name });
+            }
+            return Ok(new { isAuthenticated = false });
         }
 
-        [HttpPost]
-        public async Task<IActionResult> Login(LoginViewModel model)
+        // POST: api/users/login
+        [HttpPost("login")]
+        public async Task<IActionResult> Login([FromBody] LoginViewModel model)
         {
+            // [FromBody] ile JSON veriyi karşılıyoruz
             if (!ModelState.IsValid)
-                return View(model);
+                return BadRequest(ModelState);
 
             var user = await _userRepository.Users
-            .FirstOrDefaultAsync(x =>
-            x.Email == model.Email || x.UserName == model.Email);
+                .FirstOrDefaultAsync(x => x.Email == model.Email || x.UserName == model.Email);
 
             if (user == null || user.Password != model.Password)
             {
-                ModelState.AddModelError("", "Girdiğiniz bilgiler yanlış.");
-                return View(model);
+                return Unauthorized(new { message = "E-posta veya şifre hatalı." });
             }
 
             var claims = new List<Claim>
@@ -55,35 +62,27 @@ namespace TicketApp.Controllers
             var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
             var principal = new ClaimsPrincipal(identity);
 
+            // Cookie'yi tarayıcıya set et
             await HttpContext.SignInAsync(
                 CookieAuthenticationDefaults.AuthenticationScheme,
                 principal);
 
-            return RedirectToAction("Profile");
+            // Angular'a başarılı döndük
+            return Ok(new { message = "Giriş başarılı", userId = user.Id });
         }
 
-
-        public IActionResult Register()
-        {
-            if (User.Identity!.IsAuthenticated)
-                return RedirectToAction("Profile");
-
-            return View();
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> Register(RegisterViewModel model)
+        // POST: api/users/register
+        [HttpPost("register")]
+        public async Task<IActionResult> Register([FromBody] RegisterViewModel model)
         {
             if (!ModelState.IsValid)
-                return View(model);
+                return BadRequest(ModelState);
 
-            // Email daha önce kullanılmış mı?
             var exist = await _userRepository.GetUserByEmailAsync(model.Email!);
 
             if (exist != null)
             {
-                ModelState.AddModelError("", "Bu e-posta kullanılmaktadır.");
-                return View(model);
+                return BadRequest(new { message = "Bu e-posta zaten kullanımda." });
             }
 
             var user = new User
@@ -95,43 +94,46 @@ namespace TicketApp.Controllers
 
             await _userRepository.CreateUser(user);
 
-            return RedirectToAction("Login");
+            return Ok(new { message = "Kayıt başarılı" });
         }
 
+        // GET: api/users/logout
+        [HttpGet("logout")]
         public async Task<IActionResult> Logout()
         {
             await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-            return RedirectToAction("Login");
+            return Ok(new { message = "Çıkış yapıldı" });
         }
 
+        // GET: api/users/profile
+        [HttpGet("profile")]
         public async Task<IActionResult> Profile()
+        {
+            if (!User.Identity!.IsAuthenticated)
+                return Unauthorized(new { message = "Giriş yapmalısınız." });
+
+            int userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+            var user = await _userRepository.Users
+                .FirstOrDefaultAsync(x => x.Id == userId);
+
+            if (user == null)
+                return NotFound(new { message = "Kullanıcı bulunamadı." });
+
+            var purchases = await _purchaseRepository.TicketPurchases
+                .Where(x => x.UserId == userId)
+                .Include(x => x.Ticket)
+                .Include(x => x.Seat)
+                .ToListAsync();
+
+            // ViewModel yerine direkt anonim obje veya DTO dönüyoruz
+            var response = new 
             {
-                if (!User.Identity!.IsAuthenticated)
-                    return RedirectToAction("Login");
+                User = new { user.UserName, user.Email }, // Hassas verileri (şifre gibi) gizle
+                Purchases = purchases
+            };
 
-                int userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
-                var user = await _userRepository.Users
-                    .FirstOrDefaultAsync(x => x.Id == userId);
-
-                if (user == null)
-                    return NotFound();
-
-                var purchases = await _purchaseRepository.TicketPurchases
-                    .Where(x => x.UserId == userId)
-                    .Include(x => x.Ticket)
-                    .Include(x => x.Seat) 
-                    .ToListAsync();
-
-                var model = new UserProfileViewModel
-                {
-                    User = user,
-                    Purchases = purchases
-                };
-
-                return View(model);
-            }
-
-
+            return Ok(response);
+        }
     }
 }
